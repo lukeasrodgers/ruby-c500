@@ -1,7 +1,8 @@
+require 'byebug'
 PAGE_SIZE = 65536  # webassembly native page size
 
 # Print the message with a traceback, along with a line number if supplied, and exit.
-def die(message:, line: nil)
+def die(message, line = nil)
   STDERR.puts("\n" + "-" * 30 + "\n")
   puts Kernel.caller
   STDERR.puts("\n" + "-" * 30 + "\n")
@@ -46,6 +47,7 @@ $emitter = Emitter.new
 # of the wasm code? kinda like globals?
 # or maybe just hardcoded/constant strings? to reuse where possible?
 class StringPool
+  attr_reader :base
   def initialize
     @base = @current = PAGE_SIZE
     @strs = {}
@@ -98,6 +100,7 @@ TOK_INTCONST, TOK_CHARCONST, TOK_STRCONST = "IntConst", "CharConst", "StrConst"
 Token = Data.define(:kind, :content, :line)
 
 class Lexer
+  attr_reader :loc, :line
   def initialize(src:, types:, loc: 0, line: 0)
     @src = src
     @types = types
@@ -165,48 +168,48 @@ class Lexer
       tok = m[0]
       if LITERAL_TOKENS.include?(tok)
         # for literal tokens, the kind is their symbol / keyword
-        return Token(tok, tok, @line)
+        return Token.new(tok, tok, @line)
       end
 
       # lexer hack
       type = @types.include?(tok) ? TOK_TYPE : TOK_NAME
-      return Token(type, tok, @line)
+      return Token.new(type, tok, @line)
     end
 
     # int constants
     m = @src[@loc..].match(/^[0-9]+/)
     if m
-      return Token(TOK_INTCONST, m[0], @line)
+      return Token.new(TOK_INTCONST, m[0], @line)
     end
 
     # char constants
     escape = /(\\([\\abfnrtv'"?]|[0-7]{1,3}|x[A-Fa-f0-9]{1,2}))/
     m = @src[@loc..].match(escape)
     if m
-      return Token(TOK_CHARCONST, m[0], @line)
+      return Token.new(TOK_CHARCONST, m[0], @line)
     end
 
     # string constants
     # TODO refactor with escape above
     m = @src[@loc..].match(/^"([^"\\]|(\\([\\abfnrtv'"?]|[0-7]{1,3}|x[A-Fa-f0-9]{1,2})))*?(?<!\\)"/)
     if m
-      return Token(TOK_STRCONST, m[0], @line)
+      return Token.new(TOK_STRCONST, m[0], @line)
     end
 
     # other tokens not caught by the identifier-like-token check above
-    LITERAL_TOKEN.each do |token_kind|
+    LITERAL_TOKENS.each do |token_kind|
       if @src[@loc..].start_with?(token_kind)
         # for literal tokens, the kind is their symbol / keyword
-        return Token(token_kind, token_kind, @line)
+        return Token.new(token_kind, token_kind, @line)
       end
     end
 
     # emit a TOK_INVALID token with an arbitrary amount of context
-    return Token(TOK_INVALID, @src[@loc..(@loc+10)], @line)
+    return Token.new(TOK_INVALID, @src[@loc..(@loc+10)], @line)
   end
 
   # Consume the next token. If `kind` is specified, die if the token doesn't match.
-  def next(kind)
+  def next(kind = nil)
     token = peek
 
     if kind && token.kind != kind
@@ -226,13 +229,13 @@ class Lexer
   def try_next(kind)
     if peek.kind == kind
       # TODO maybe rename to avoid confusing ruby parser?
-      send(:next)
+      send(:next, kind)
     end
   end
 end
 
 class CType
-  attr_accessor :decl_line, :pointer_level
+  attr_accessor :decl_line, :pointer_level, :wasmtype
 
   def initialize(typename:, pointer_level: 0, array_size: nil, decl_line: nil)
     @typename = typename
@@ -240,7 +243,7 @@ class CType
     @array_size = array_size
     @decl_line = decl_line
 
-    if ["char", "line"].exclude?(typename)
+    if !["char", "int"].include?(typename)
       die("unknown type #{typename}", decl_line)
     end
     @signed = true
@@ -311,10 +314,11 @@ $typedefs = {}
 # it will be used instead of trying to eat a new type token from the lexer,
 # to support parsing a type in a comma-separated declaration like `int x, *y;`.
 # @return [Array<Ctype, Token>]
-def parse_type_and_name(lexer, prev_t)
-  t = prev_t || lexer.next(TOK_TYPE).content
-  ct = typedefs[t].&dup || CType.new(typename: t)
+def parse_type_and_name(lexer, prev_t = nil)
+  t = prev_t or lexer.next(TOK_TYPE).content
+  ct = ($typedefs[t].&dup) || CType.new(typename: t)
   ct.decl_line = lexer.line
+  type = ct
 
   while lexer.try_next("*") do
     type.pointer_level += 1
@@ -337,7 +341,9 @@ end
 FrameVar = Data.define(:name, :type, :local_offset, :is_parameter)
 
 class StackFrame
-  def initialize(parent: "StackFrame | None")
+  attr_reader :frame_size, :frame_offset, :variables
+
+  def initialize(parent: nil)
     @parent = parent
     @variables = {}
     @frame_size = 0
@@ -351,7 +357,7 @@ class StackFrame
   def get_var_and_offset(name)
     n = name.is_a?(String) ? name : name.content
     if (slot = @variables[n])
-      return [slot, @frame_offset + @local_offset]
+      return [slot, @frame_offset + slot.local_offset]
     elsif !@parent.nil?
       return @parent.get_var_and_offset(name)
     else
@@ -361,11 +367,11 @@ class StackFrame
 end
 
 def emit_return(frame)
-  emit("global.get $__stack_pointer ;; fixup stack pointer before return")
-  emit("i32.const #{frame.frame_size}")
-  emit("i32.add")
-  emit("global.set $__stack_pointer")
-  emit("return")
+  $emitter.emit("global.get $__stack_pointer ;; fixup stack pointer before return")
+  $emitter.emit("i32.const #{frame.frame_size}")
+  $emitter.emit("i32.add")
+  $emitter.emit("global.set $__stack_pointer")
+  $emitter.emit("return")
 end
 
 # Metadata returned after generating code for an expression.
@@ -381,17 +387,17 @@ ExprMeta = Data.define(:is_place, :type)
 # Load a place `ExprMeta`, turning it into a value `ExprMeta` of the same type
 def load_result(em)
   if em.is_place
-    emit(em.type.load_ins)
+    $emitter.emit(em.type.load_ins)
   end
-  return ExprMeta(false, em.type)
+  return ExprMeta.new(false, em.type)
 end
 
 # Mask an i32 down to the appropriate size after an operation
 def mask_to_sizeof(t)
   if !(t.is_arr? || t.sizeof == 4)
     # bits = `8 * sizeof`, less one if the type is signed since that's in the high sign bit)
-    emit("i32.const #{hex(2 ** (8 * t.sizeof - t.signed) - 1)}")
-    emit(f"i32.and")
+    $emitter.emit("i32.const #{hex(2 ** (8 * t.sizeof - t.signed) - 1)}")
+    $emitter.emit(f"i32.and")
   end
 end
 
@@ -407,19 +413,21 @@ class Expression
 
   # function for generating simple operator precedence levels from declarative
   # dictionaries of { token: instruction_to_emit }
-  def self.makeop(method_name:, higher:, ops:, rtype:)
+  def self.makeop(method_name, higher, ops, rtype = nil)
     define_method(method_name) do
       # call another class method method
-      lhs_meta = send(:higher)
+      # TODO not sure what to do here, what is python callable?
+      lhs_meta = higher
       if ops.keys().include?(lexer.peek().kind)
         lhs_meta = load_result(lhs_meta)
         op_token = lexer.next()
         load_result(op())
         # TODO: type checking?
-        emit("#{ops[op_token.kind]}")
+        $emitter.emit("#{ops[op_token.kind]}")
         mask_to_sizeof(rtype || lhs_meta.type)
         return ExprMeta.new(false, lhs_meta.type)
       end
+      return lhs_meta
     end
   end
 
@@ -430,13 +438,13 @@ class Expression
   def initialize(lexer, frame)
     @lexer = lexer
     @frame = frame
-    makeop(:muldiv, prefix, {"*": "i32.mul", "/": "i32.div_s", "%": "i32.rem_s"})
-    makeop(:shlr, plusminus, {"<<": "i32.shl", ">>": "i32.shr_s"})
-    cmplg = makeop(:cmplg, shlr, {"<": "i32.lt_s", ">": "i32.gt_s", "<=": "i32.le_s", ">=": "i32.ge_s"}, CType.new(typename: "int"))
-    cmpe = makeop(:cmpe, cmplg, {"==": "i32.eq", "!=": "i32.ne"}, CType.new(typename: "int"))
-    bitand = makeop(:bitand, cmpe, {"&": "i32.and"})
-    bitor = makeop(:bitor, bitand, {"|": "i32.or"})
-    xor = makeop(:xor, bitor, {"^": "i32.xor"})
+    self.class.makeop(:muldiv, prefix, {"*": "i32.mul", "/": "i32.div_s", "%": "i32.rem_s"})
+    self.class.makeop(:shlr, plusminus, {"<<": "i32.shl", ">>": "i32.shr_s"})
+    self.class.makeop(:cmplg, shlr, {"<": "i32.lt_s", ">": "i32.gt_s", "<=": "i32.le_s", ">=": "i32.ge_s"}, CType.new(typename: "int"))
+    self.class.makeop(:cmpe, cmplg, {"==": "i32.eq", "!=": "i32.ne"}, CType.new(typename: "int"))
+    self.class.makeop(:bitand, cmpe, {"&": "i32.and"})
+    self.class.makeop(:bitor, bitand, {"|": "i32.or"})
+    self.class.makeop(:xor, bitor, {"^": "i32.xor"})
   end
 
   def assign
@@ -445,14 +453,14 @@ class Expression
       if !lhs_meta.is_place
         die("lhs of assignment cannot be value", lexer.line)
       end
-      emit("call $__dup_i32")  # save copy of addr for later
+      $emitter.emit("call $__dup_i32")  # save copy of addr for later
       rhs_meta = load_result(assign())
 
-      emit(lhs_meta.type.store_ins())
+      $emitter.emit(lhs_meta.type.store_ins())
       # use the saved address to immediately reload the value
       # this is slower than saving the value we just wrote, but easier to codegen :-)
       # this is needed for expressions like x = (y = 1)
-      emit(lhs_meta.type.load_ins())
+      $emitter.emit(lhs_meta.type.load_ins())
       return rhs_meta
     end
     return lhs_meta
@@ -460,11 +468,11 @@ class Expression
 
   def value
     if const = lexer.try_next(TOK_INTCONST)
-      emit("i32.const #{const.content}")
+      $emitter.emit("i32.const #{const.content}")
       return ExprMeta.new(false, CType.new(typename: "int"))
     elsif const = lexer.try_next(TOK_CHARCONST)
       # cursed, but it works
-      emit("i32.const #{ord(eval(const.content))}")
+      $emitter.emit("i32.const #{ord(eval(const.content))}")
       # character constants are integers in c, not char
       return ExprMeta.new(false, CType.new(typename: "int"))
     elsif const = lexer.try_next(TOK_STRCONST)
@@ -475,7 +483,7 @@ class Expression
       while const = lexer.try_next(TOK_STRCONST) do
         s += eval(const.content).encode("ascii")
       end
-      emit("i32.const #{str_pool.add(s)}")
+      $emitter.emit("i32.const #{$str_pool.add(s)}")
       return ExprMeta.new(false, CType.new("char", pointer_level: 1))
     elsif lexer.try_next("(")
       meta = Expression.call(lexer, frame)
@@ -497,14 +505,14 @@ class Expression
         end
         lexer.next(")")
         # call the function
-        emit("call $#{varname.content}")
+        $emitter.emit("call $#{varname.content}")
         return ExprMeta.new(false, CType.new(typename: "int")) # TODO return type
       else
         # no, it's a variable reference, fetch it
         var, offset = frame.get_var_and_offset(varname)
-        emit("global.get $__stack_pointer ;; load #{varname.content}")
-        emit("i32.const #{offset}")
-        emit("i32.add")
+        $emitter.emit("global.get $__stack_pointer ;; load #{varname.content}")
+        $emitter.emit("i32.const #{offset}")
+        $emitter.emit("i32.add")
         return ExprMeta.new(true, var.type)
       end
     end
@@ -516,17 +524,17 @@ class Expression
       lhs_meta = load_result(lhs_meta)
       l_type = lhs_meta.type
 
-      if !(l_type.is_arr() || l_type.is_ptr())
+      if !(l_type.is_arr? || l_type.is_ptr())
         die(f"not an array or pointer: {lhs_meta.type}", lexer.line)
       end
 
-      el_type = l_type.is_arr() ? l_type.as_non_array() : l_type.less_ptr()
+      el_type = l_type.is_arr? ? l_type.as_non_array() : l_type.less_ptr()
 
       load_result(expression(lexer, frame))
       lexer.next("]")
-      emit("i32.const #{el_type.sizeof()}")
-      emit("i32.mul")
-      emit("i32.add")
+      $emitter.emit("i32.const #{el_type.sizeof()}")
+      $emitter.emit("i32.mul")
+      $emitter.emit("i32.add")
       return ExprMeta.new(true, el_type)
     else
       return lhs_meta
@@ -547,29 +555,29 @@ class Expression
       end
       return ExprMeta.new(true, meta.type.less_ptr())
     elsif lexer.try_next("-")
-      emit("i32.const 0")
+      $emitter.emit("i32.const 0")
       meta = load_result(prefix())
-      emit("i32.sub")
+      $emitter.emit("i32.sub")
       mask_to_sizeof(meta.type)
       return meta
     elsif lexer.try_next("+")
       return load_result(prefix())
     elsif lexer.try_next("!")
       meta = load_result(prefix())
-      emit("i32.eqz")
+      $emitter.emit("i32.eqz")
       return meta
     elsif lexer.try_next("~")
       meta = load_result(prefix())
-      emit("i32.const 0xffffffff")
-      emit("i32.xor")
+      $emitter.emit("i32.const 0xffffffff")
+      $emitter.emit("i32.xor")
       mask_to_sizeof(meta.type)
       return meta
     else
-      return accessor(lexer, frame)
+      return accessor
     end
   end
 
-  def plusminus(lexer, frame)
+  def plusminus
     lhs_meta = muldiv
 
     if ["+", "-"].include?(lexer.peek().kind)
@@ -589,22 +597,22 @@ class Expression
         die("cannot #{op_token.content} #{lhs_meta.type} and #{rhs_meta.type}")
       elsif lhs_meta.type.is_ptr() && !rhs_meta.type.is_ptr()
         # left hand side is pointer: multiply rhs by sizeof
-        emit("i32.const #{lhs_meta.type.less_ptr().sizeof()}")
-        emit("i32.mul")
+        $emitter.emit("i32.const #{lhs_meta.type.less_ptr().sizeof()}")
+        $emitter.emit("i32.mul")
       elsif !lhs_meta.type.is_ptr() && rhs_meta.type.is_ptr()
         # right hand side is pointer: juggle the stack to get rhs on top,
         # then multiply and juggle back
         res_type = rhs_meta.type
-        emit("call $__swap_i32")
-        emit("i32.const #{rhs_meta.type.less_ptr().sizeof()}")
-        emit("i32.mul")
-        emit("call $__swap_i32")
+        $emitter.emit("call $__swap_i32")
+        $emitter.emit("i32.const #{rhs_meta.type.less_ptr().sizeof()}")
+        $emitter.emit("i32.mul")
+        $emitter.emit("call $__swap_i32")
       end
 
       if op_token.kind == "+" 
-        emit("i32.add")
+        $emitter.emit("i32.add")
       else
-        emit("i32.sub")
+        $emitter.emit("i32.sub")
       end
 
       if op_token.kind == "-" && lhs_type.is_ptr() && rhs_type.is_ptr()
@@ -612,8 +620,8 @@ class Expression
         # `((int*)8) - ((int*)4) == 1`, so we need to divide by sizeof
         # (we could use shl, but the webassembly engine will almost
         #  certainly do the strength reduction for us)
-        emit("i32.const #{rhs_meta.type.less_ptr().sizeof()}")
-        emit("i32.div_s")
+        $emitter.emit("i32.const #{rhs_meta.type.less_ptr().sizeof()}")
+        $emitter.emit("i32.div_s")
         res_type = CType.new(typename: "int")
       end
 
@@ -626,3 +634,317 @@ class Expression
   end
 
 end
+
+class Statement
+  attr_reader :lexer, :frame
+
+  def self.call(lexer, frame)
+    new(lexer, frame).call
+  end
+
+  def initialize(lexer, frame)
+    @lexer = lexer
+    @frame = frame
+  end
+
+  def call
+    if lexer.try_next("return")
+      if lexer.peek.kind != ";"
+        load_result(Expression.call(lexer, frame))
+      end
+      lexer.next(";")
+      emit_return(frame)
+    elsif lexer.try_next("if")
+      # we emit two nested blocks:
+      #
+      # block
+      #   block
+      #     ;; if test
+      #     br_if 0
+      #     ;; if body
+      #     br 1
+      #   end
+      #   ;; else body
+      # end
+      #
+      # the first br_if 0 will conditionally jump to the end of the inner block
+      # if the test results in `0`, running the `;; else body` code.
+      # the second, unconditional `br 1` will jump to the end of the outer block,
+      # skipping `;; else body` if `;; if body` already ran.
+      $emitter.emit.block(start: "block ;; if statement", finish: "end") do
+        $emitter.emit.block(start: "block", finish: "end") do
+          parenthesized_test()
+          $emitter.emit("br_if 0 ;; jump to else")
+          bracketed_block_or_single_statement(lexer, frame)
+          $emitter.emit("br 1 ;; exit if")  # skip to end of else block
+        end
+        if lexer.try_next("else")
+          bracketed_block_or_single_statement(lexer, frame)
+        end
+      end
+    elsif lexer.try_next("while")
+      # we again emit two nested blocks, but one is a loop:
+      #
+      # block
+      #   loop
+      #     ;; test
+      #     br_if 1
+      #     ;; loop body
+      #     br 0
+      #   end
+      # end
+      #
+      # `while` statements don't have else blocks, so this isn't for the same reason
+      # as `if`. instead, it's because of how loop blocks work. a branch (br or br_if)
+      # in a loop block jumps to the *beginning* of the block, not the end, so to exit
+      # early we need an outer, regular block that we can jump to the end of.
+      # `br_if 1` jumps to the end of that outer block if the test fails,
+      # skipping the loop body.
+      # `br 0` jumps back to the beginning of the loop to re-run the test if the loop
+      # body finishes.
+      $emitter.emit.block(start: "block ;; while", finish: "end") do
+        $emitter.emit.block(start: "loop", finish: "end") do
+          parenthesized_test()
+          $emitter.emit("br_if 1 ;; exit loop")
+          bracketed_block_or_single_statement(lexer, frame)
+          $emitter.emit("br 0 ;; repeat loop")
+        end
+      end
+    elsif lexer.try_next("do")
+      # `do` is very similar to `while`, but the test is at the end instead.
+      $emitter.emit.block(start: "block ;; do-while", finish: "end") do
+        $emitter.emit.block(start: "loop", finish: "end") do
+          bracketed_block_or_single_statement(lexer, frame)
+          lexer.next("while")
+          parenthesized_test()
+          $emitter.emit("br_if 1 ;; exit loop")
+          $emitter.emit("br 0 ;; repeat loop")
+          lexer.next(";")
+        end
+      end
+    elsif lexer.try_next("for")
+      # for is the most complicated control structure. it's also the hardest to
+      # deal with in our setup, because the third "advancement" statement (e.g. i++ in
+      # a typical range loop) needs to be generated *after* the body, even though it
+      # comes before. We'll handle this by relexing it, which I'll show in a second.
+      # just like the while and do loop, we'll have two levels of blocks:
+      #
+      # block
+      #   ;; for initializer
+      #   drop ;; discard the result of the initializer
+      #   loop
+      #     ;; for test
+      #     br_if 1
+      #     ;; (we lex over the advancement statement here, but don't emit any code)
+      #     ;; for body
+      #     ;; for advancement (re-lexed)
+      #     br 0
+      #   end
+      # end
+      #
+      # Just like in the `while` or `do`, we emit the test, `br_if` to the end of the outer block
+      # if the test fails, and otherwise `br 0` to the beginning of the inner loop.
+      # The differences are:
+      # 1. We code for the initializer and to discard its value at the beginning of the block.
+      #    This code only runs once, it's just grouped into the for block for ease of reading the
+      #    WebAssembly.
+      # 2. We have the for advancement statement emitted *after* the body. How?
+      #    Right before lexing it the first time, we save a copy of the current lexer,
+      #    including its position.
+      #    Then, we disable `emit()` with the `no_emit` context manager and call `expression`.
+      #    This will skip over the expression without emitting any code.
+      #    Next, we lex and emit code for the body as usual.
+      #    Finally, before parsing the closing curly brace for the for loop, we use the saved
+      #    lexer to go over the advancement statement *again*, but this time emitting code.
+      #    This places the code for the advancement statement in the right place.
+      #    Perfect! All it took was some minor crimes against the god of clean code :-)
+      lexer.next("(")
+      $emitter.emit.block(start: "block ;; for", finish: "end") do
+        if lexer.peek.kind != ";"
+          Expression.call(lexer, frame)
+          $emitter.emit("drop ;; discard for initializer")
+        end
+        lexer.next(";")
+        $emitter.emit.block(start: "loop", finish: "end") do
+          if lexer.peek().kind != ";"
+            load_result(expression(lexer, frame))
+            $emitter.emit("i32.eqz ;; for test")
+            $emitter.emit("br_if 1 ;; exit loop")
+          end
+          lexer.next(";")
+          saved_lexer = nil
+          if lexer.peek().kind != ")"
+            # save lexer position to emit advance stmt later (nasty hack)
+            saved_lexer = lexer.clone() # TODO clone or dup?
+            $emitter.emit.no_emit() do
+              Expression.call(lexer, frame)  # advance past expr
+            end
+          end
+          lexer.next(")")
+          $emitter.emit(";; for body")
+          bracketed_block_or_single_statement(lexer, frame)
+          if saved_lexer != nil
+            $emitter.emit(";; for advancement")
+            Expression.call(saved_lexer, frame)  # use saved lexer
+          end
+          $emitter.emit("br 0 ;; repeat loop")
+        end
+      end
+    elsif lexer.try_next(";")
+      # noop
+    else
+      Expression.call(lexer, frame)
+      lexer.next(";")
+      $emitter.emit("drop ;; discard statement expr result")
+    end
+  end
+
+  private
+
+  # Helper to parse a parenthesized condition like `(x == 1)`
+  def parenthesized_test
+    lexer.next("(")
+    load_result(Expression.call(lexer, frame))
+    lexer.next(")")
+    $emitter.emit("i32.eqz")
+  end
+
+  # Helper to parse the block of a control flow statement
+  def bracketed_block_or_single_statement(lexer, frame)
+    if lexer.try_next("{")
+      while !lexer.try_next("}")
+        Statement.call(lexer, frame)
+      end
+    else
+      Statement.call(lexer, frame)
+    end
+  end
+end
+
+def variable_declaration(lexer, frame)
+  # parse a variable declaration like `int x, *y[2], **z`.
+  # the only thing each element in that list shares is the typename.
+  # adds each parsed variable to the provided stack frame.
+
+  # we need to explicitly grab this in case it's a typedef--the return type will have
+  # the resolved typename, so if get back `int*` we don't know if the decl was
+  # `typedef int* foo; foo x, *y` or `int *x, *y` -- in the first case y should be `int**`,
+  # but in the second it should be `int*`
+  prev_typename = lexer.peek().content
+  # however we don't use prev_typename for the first call, because we want parse_type_and_name to
+  # still eat the typename
+  type, varname = parse_type_and_name(lexer)
+  frame.add_var(varname.content, type)
+
+  while lexer.try_next(",") do
+    type, varname = parse_type_and_name(lexer, prev_typename)
+    frame.add_var(varname.content, type)
+  end
+
+  lexer.next(";")
+end
+
+def global_declaration(global_frame, lexer)
+  # parse a global declaration -- typedef, global variable, or function.
+
+  if lexer.try_next("typedef")
+    # yes, `typedef int x[24];` is valid (but weird) c
+    type, name = parse_type_and_name(lexer)
+    # lexer hack!
+    lexer.types.add(name.content)
+    $typedefs[name.content] = type
+
+    lexer.next(";")
+    return
+  end
+
+  decl_type, name = parse_type_and_name(lexer)
+
+  if lexer.try_next(";")
+    # variable declaration
+    global_frame.add_var(name.content, decl_type, false)
+    return
+  end
+
+  # otherwise, we're declaring a function (or, there's an = sign and this is
+  # a global array initialization, which we don't support)
+  if decl_type.is_arr?
+    die("function array return / global array initializer not supported")
+  end
+
+  frame = StackFrame.new(parent: global_frame)
+  lexer.next("(")
+  while !lexer.try_next(")") do
+    type, varname = parse_type_and_name(lexer)
+    frame.add_var(varname.content, type, true)
+    if lexer.peek().kind != ")"
+      lexer.try_next(",")
+    end
+  end
+
+  lexer.next("{")
+  # declarations (up top, c89 only yolo)
+  while lexer.peek().kind == TOK_TYPE do
+    variable_declaration(lexer, frame)
+  end
+
+  $emitter.block(start: "(func $#{name.content}", finish: ")") do
+    frame.variables.values.each do |v|
+      if v.is_parameter
+        $emitter.emit("(param $#{v.name} #{v.type.wasmtype})")
+      end
+    end
+    $emitter.emit("(result #{decl_type.wasmtype})")
+    $emitter.emit("global.get $__stack_pointer ;; prelude -- adjust stack pointer")
+    $emitter.emit("i32.const #{frame.frame_offset + frame.frame_size}")
+    $emitter.emit("i32.sub")
+    $emitter.emit("global.set $__stack_pointer")
+    frame.variables.values().reverse.each do |v|
+      if v.is_parameter
+        $emitter.emit("global.get $__stack_pointer ;; prelude -- setup parameter")
+        $emitter.emit("i32.const #{frame.get_var_and_offset(v.name)[1]}")
+        $emitter.emit("i32.add")
+        $emitter.emit("local.get $#{v.name}")
+        $emitter.emit(v.type.store_ins())
+      end
+    end
+
+    while !lexer.try_next("}") do
+      Statement.call(lexer, frame)
+    end
+
+    $emitter.emit("unreachable")
+    # TODO: for void functions we need to add an addl emit_return for implicit returns
+  end
+end
+
+def compile(src)
+  # compile an entire file
+
+  $emitter.block(start: "(module", finish: ")") do
+    $emitter.emit("(memory 3)")
+    $emitter.emit("(global $__stack_pointer (mut i32) (i32.const #{PAGE_SIZE * 3}))")
+    $emitter.emit("(func $__dup_i32 (param i32) (result i32 i32)")
+    $emitter.emit("  (local.get 0) (local.get 0))")
+    $emitter.emit("(func $__swap_i32 (param i32) (param i32) (result i32 i32)")
+    $emitter.emit("  (local.get 1) (local.get 0))")
+
+    global_frame = StackFrame.new
+    lexer = Lexer.new(src: src, types: Set.new(["int", "char", "short", "long", "float", "double"]))
+    while lexer.peek().kind != TOK_EOF do
+      global_declaration(global_frame, lexer)
+    end
+
+    $emitter.emit('(export "main" (func $main))')
+
+    # emit str_pool data section
+    $emitter.emit("(data $.rodata (i32.const #{$str_pool.base}) \"#{$str_pool.pooled()}\")")
+  end
+end
+
+# with fileinput.input(encoding="utf-8") as fi:
+    # compile("".join(fi))  # todo: make this line-at-a-time?
+
+path = ARGV[0]
+s = File.read(path)
+compile(s)
