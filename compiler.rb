@@ -586,7 +586,6 @@ class Expression
     lhs_meta = muldiv
 
     if ["+", "-"].include?(lexer.peek().kind)
-      # puts("\n\nplusminus\n\n")
       lhs_meta = load_result(lhs_meta)
       op_token = lexer.next()
       rhs_meta = load_result(plusminus())

@@ -1,0 +1,36 @@
+#!/bin/zsh
+
+# Check for the correct number of arguments
+if [ "$#" -ne 1 ]; then
+    echo "Usage: $0 <file>"
+    exit 1
+fi
+
+# Get the file name from the argument
+file="$1"
+
+# Define the command for the Ruby program
+ruby_command="bundle exec ruby compiler.rb $file"
+
+# Define the command for the Python program
+python_command="python3 compiler.py $file"
+
+# Run the Ruby program and save its output to a file
+ruby_output_file="ruby_output.txt"
+eval "$ruby_command" > "$ruby_output_file"
+
+# Run the Python program and save its output to a file
+python_output_file="python_output.txt"
+eval "$python_command" > "$python_output_file"
+
+# Compare the output files
+if cmp -s "$ruby_output_file" "$python_output_file"; then
+    echo "Success"
+else
+    echo "Failure: Outputs do not match"
+    echo "Ruby Output:"
+    cat "$ruby_output_file"
+    echo "Python Output:"
+    cat "$python_output_file"
+fi
+

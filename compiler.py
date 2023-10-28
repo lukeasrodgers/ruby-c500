@@ -8,7 +8,6 @@ from typing import Callable, NoReturn
 
 PAGE_SIZE = 65536  # webassembly native page size
 
-
 def die(message: str, line: int | None = None) -> NoReturn:
     """Print the message with a traceback, along with a line number if supplied, and exit."""
     print("\n" + "-" * 30 + "\n", file=sys.stderr)
@@ -473,10 +472,7 @@ def expression(lexer: Lexer, frame: StackFrame) -> ExprMeta:
         higher: Callable[[], ExprMeta], ops: dict[str, str], rtype: CType | None = None
     ) -> Callable[[], ExprMeta]:
         def op() -> ExprMeta:
-            print("look higher")
             lhs_meta = higher()
-            #  print(f"keys: {ops.keys()}\n\n\n")
-            print(f"peeknext = {lexer.peek().kind}")
             if lexer.peek().kind in ops.keys():
                 lhs_meta = load_result(lhs_meta)
                 op_token = lexer.next()
@@ -495,7 +491,6 @@ def expression(lexer: Lexer, frame: StackFrame) -> ExprMeta:
         lhs_meta = muldiv()
 
         if lexer.peek().kind in ("+", "-"):
-            print("\n\nplusminus\n\n")
             lhs_meta = load_result(lhs_meta)
             op_token = lexer.next()
             rhs_meta = load_result(plusminus())
