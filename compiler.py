@@ -1,3 +1,4 @@
+import pdb
 import contextlib
 import dataclasses
 import re
@@ -472,7 +473,10 @@ def expression(lexer: Lexer, frame: StackFrame) -> ExprMeta:
         higher: Callable[[], ExprMeta], ops: dict[str, str], rtype: CType | None = None
     ) -> Callable[[], ExprMeta]:
         def op() -> ExprMeta:
+            print("look higher")
             lhs_meta = higher()
+            #  print(f"keys: {ops.keys()}\n\n\n")
+            print(f"peeknext = {lexer.peek().kind}")
             if lexer.peek().kind in ops.keys():
                 lhs_meta = load_result(lhs_meta)
                 op_token = lexer.next()
@@ -491,6 +495,7 @@ def expression(lexer: Lexer, frame: StackFrame) -> ExprMeta:
         lhs_meta = muldiv()
 
         if lexer.peek().kind in ("+", "-"):
+            print("\n\nplusminus\n\n")
             lhs_meta = load_result(lhs_meta)
             op_token = lexer.next()
             rhs_meta = load_result(plusminus())
@@ -549,6 +554,7 @@ def expression(lexer: Lexer, frame: StackFrame) -> ExprMeta:
             if not lhs_meta.is_place:
                 die("lhs of assignment cannot be value", lexer.line)
             emit("call $__dup_i32")  # save copy of addr for later
+            #  breakpoint()
             rhs_meta = load_result(assign())
 
             emit(lhs_meta.type.store_ins())

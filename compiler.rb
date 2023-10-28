@@ -315,7 +315,7 @@ $typedefs = {}
 # to support parsing a type in a comma-separated declaration like `int x, *y;`.
 # @return [Array<Ctype, Token>]
 def parse_type_and_name(lexer, prev_t = nil)
-  t = prev_t or lexer.next(TOK_TYPE).content
+  t = prev_t || lexer.next(TOK_TYPE).content
   ct = ($typedefs[t].&dup) || CType.new(typename: t)
   ct.decl_line = lexer.line
   type = ct
@@ -352,6 +352,7 @@ class StackFrame
 
   def add_var(name, type, is_parameter = false)
     @variables[name] = FrameVar.new(name, type, @frame_size, is_parameter)
+    @frame_size += type.sizeof()
   end
 
   def get_var_and_offset(name)
@@ -417,7 +418,10 @@ class Expression
     define_method(method_name) do
       # call another class method method
       # TODO not sure what to do here, what is python callable?
-      lhs_meta = higher
+      # puts("look higher from #{method_name}")
+      lhs_meta = send(higher)
+      # puts("keys: #{ops.keys}\n\n\n")
+      # puts "peeknext = #{lexer.peek().kind}"
       if ops.keys().include?(lexer.peek().kind)
         lhs_meta = load_result(lhs_meta)
         op_token = lexer.next()
@@ -438,13 +442,13 @@ class Expression
   def initialize(lexer, frame)
     @lexer = lexer
     @frame = frame
-    self.class.makeop(:muldiv, prefix, {"*": "i32.mul", "/": "i32.div_s", "%": "i32.rem_s"})
-    self.class.makeop(:shlr, plusminus, {"<<": "i32.shl", ">>": "i32.shr_s"})
-    self.class.makeop(:cmplg, shlr, {"<": "i32.lt_s", ">": "i32.gt_s", "<=": "i32.le_s", ">=": "i32.ge_s"}, CType.new(typename: "int"))
-    self.class.makeop(:cmpe, cmplg, {"==": "i32.eq", "!=": "i32.ne"}, CType.new(typename: "int"))
-    self.class.makeop(:bitand, cmpe, {"&": "i32.and"})
-    self.class.makeop(:bitor, bitand, {"|": "i32.or"})
-    self.class.makeop(:xor, bitor, {"^": "i32.xor"})
+    self.class.makeop(:muldiv, :prefix, {"*": "i32.mul", "/": "i32.div_s", "%": "i32.rem_s"})
+    self.class.makeop(:shlr, :plusminus, {"<<": "i32.shl", ">>": "i32.shr_s"})
+    self.class.makeop(:cmplg, :shlr, {"<": "i32.lt_s", ">": "i32.gt_s", "<=": "i32.le_s", ">=": "i32.ge_s"}, CType.new(typename: "int"))
+    self.class.makeop(:cmpe, :cmplg, {"==": "i32.eq", "!=": "i32.ne"}, CType.new(typename: "int"))
+    self.class.makeop(:bitand, :cmpe, {"&": "i32.and"})
+    self.class.makeop(:bitor, :bitand, {"|": "i32.or"})
+    self.class.makeop(:xor, :bitor, {"^": "i32.xor"})
   end
 
   def assign
@@ -454,6 +458,7 @@ class Expression
         die("lhs of assignment cannot be value", lexer.line)
       end
       $emitter.emit("call $__dup_i32")  # save copy of addr for later
+      # byebug
       rhs_meta = load_result(assign())
 
       $emitter.emit(lhs_meta.type.store_ins())
@@ -581,6 +586,7 @@ class Expression
     lhs_meta = muldiv
 
     if ["+", "-"].include?(lexer.peek().kind)
+      # puts("\n\nplusminus\n\n")
       lhs_meta = load_result(lhs_meta)
       op_token = lexer.next()
       rhs_meta = load_result(plusminus())
