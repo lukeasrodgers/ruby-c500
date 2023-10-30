@@ -781,7 +781,7 @@ class Statement
           saved_lexer = nil
           if lexer.peek().kind != ")"
             # save lexer position to emit advance stmt later (nasty hack)
-            saved_lexer = lexer.clone() # TODO clone or dup?
+            saved_lexer = lexer.clone
             $emitter.no_emit() do
               Expression.call(lexer, frame)  # advance past expr
             end
