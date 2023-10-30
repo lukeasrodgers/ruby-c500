@@ -162,7 +162,7 @@ class Lexer
     # we check identifiers before literal tokens so that "return0" isn't lexed as
     # "return", "0", but this means that we need to explicitly check for
     # identifier-like tokens so "return" isn't lexed as a Name just because it's `[a-z]+`
-    r = /^[a-zA-Z_][a-zA-Z0-9_]*/
+    r = /\A[a-zA-Z_][a-zA-Z0-9_]*/
     m = @src[@loc..].match(r)
     if m
       tok = m[0]
@@ -177,7 +177,7 @@ class Lexer
     end
 
     # int constants
-    m = @src[@loc..].match(/^[0-9]+/)
+    m = @src[@loc..].match(/\A[0-9]+/)
     if m
       return Token.new(TOK_INTCONST, m[0], @line)
     end
@@ -191,7 +191,8 @@ class Lexer
 
     # string constants
     # TODO refactor with escape above
-    m = @src[@loc..].match(/^"([^"\\]|(\\([\\abfnrtv'"?]|[0-7]{1,3}|x[A-Fa-f0-9]{1,2})))*?(?<!\\)"/)
+    # TODO may need to fix ^ here as well
+    m = @src[@loc..].match(/\A"([^"\\]|(\\([\\abfnrtv'"?]|[0-7]{1,3}|x[A-Fa-f0-9]{1,2})))*?(?<!\\)"/)
     if m
       return Token.new(TOK_STRCONST, m[0], @line)
     end
