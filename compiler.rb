@@ -423,10 +423,10 @@ class Expression
       lhs_meta = send(higher)
       # puts("keys: #{ops.keys}\n\n\n")
       # puts "peeknext = #{lexer.peek().kind}"
-      if ops.keys().include?(lexer.peek().kind)
+      if ops.keys().to_s.include?(lexer.peek().kind.to_s)
         lhs_meta = load_result(lhs_meta)
         op_token = lexer.next()
-        load_result(op())
+        load_result(send(method_name))
         # TODO: type checking?
         $emitter.emit("#{ops[op_token.kind]}")
         mask_to_sizeof(rtype || lhs_meta.type)
