@@ -530,7 +530,7 @@ class Expression
       lhs_meta = load_result(lhs_meta)
       l_type = lhs_meta.type
 
-      if !(l_type.is_arr? || l_type.is_ptr())
+      if !(l_type.is_arr? || l_type.is_ptr?)
         die(f"not an array or pointer: {lhs_meta.type}", lexer.line)
       end
 
@@ -556,7 +556,7 @@ class Expression
       return ExprMeta.new(false, meta.type.more_ptr())
     elsif lexer.try_next("*")
       meta = load_result(prefix())
-      if !meta.type.is_ptr()
+      if !meta.type.is_ptr?
         die("cannot dereference non-pointer", lexer.line)
       end
       return ExprMeta.new(true, meta.type.less_ptr())
@@ -599,13 +599,13 @@ class Expression
       # (this makes for (char* c = arr; c < arr+size; c++) work)
       if lhs_meta.type.pointer_level == rhs_meta.type.pointer_level
         # TODO will handle this later
-      elsif lhs_meta.type.is_ptr() and rhs_meta.type.is_ptr()
+      elsif lhs_meta.type.is_ptr? and rhs_meta.type.is_ptr?
         die("cannot #{op_token.content} #{lhs_meta.type} and #{rhs_meta.type}")
-      elsif lhs_meta.type.is_ptr() && !rhs_meta.type.is_ptr()
+      elsif lhs_meta.type.is_ptr? && !rhs_meta.type.is_ptr?
         # left hand side is pointer: multiply rhs by sizeof
         $emitter.emit("i32.const #{lhs_meta.type.less_ptr().sizeof()}")
         $emitter.emit("i32.mul")
-      elsif !lhs_meta.type.is_ptr() && rhs_meta.type.is_ptr()
+      elsif !lhs_meta.type.is_ptr? && rhs_meta.type.is_ptr?
         # right hand side is pointer: juggle the stack to get rhs on top,
         # then multiply and juggle back
         res_type = rhs_meta.type
@@ -621,7 +621,7 @@ class Expression
         $emitter.emit("i32.sub")
       end
 
-      if op_token.kind == "-" && lhs_type.is_ptr() && rhs_type.is_ptr()
+      if op_token.kind == "-" && lhs_type.is_ptr? && rhs_type.is_ptr?
         # handle pointer subtraction case we skipped before:
         # `((int*)8) - ((int*)4) == 1`, so we need to divide by sizeof
         # (we could use shl, but the webassembly engine will almost
