@@ -270,12 +270,12 @@ class CType
   def less_ptr
     raise "bug: not a pointer #{self}" unless is_ptr?
 
-    return self.class.new(@typename, @pointer_level - 1, @array_size)
+    return self.class.new(typename: @typename, pointer_level: @pointer_level - 1, array_size: @array_size)
   end
 
   # Makes a new type one level of pointer higher than this type, e.g. int -> int*
   def more_ptr
-    return self.class.new(@typename, @pointer_level + 1, @array_size)
+    return self.class.new(typename: @typename, pointer_level: @pointer_level + 1, array_size: @array_size)
   end
 
   # Whether this type is an array.
@@ -286,7 +286,7 @@ class CType
   # Makes a new type that's the same as this type, except it isn't an array
   def as_non_array
     raise "bug: not an array #{self}" unless is_arr?
-    return self.class.new(@typename, @pointer_level, nil)
+    return self.class.new(typename: @typename, pointer_level: @pointer_level, array_size: nil)
   end
 
   # Size of this type for a load/store"""
