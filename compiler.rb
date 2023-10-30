@@ -765,15 +765,15 @@ class Statement
       #    This places the code for the advancement statement in the right place.
       #    Perfect! All it took was some minor crimes against the god of clean code :-)
       lexer.next("(")
-      $emitter.emit.block(start: "block ;; for", finish: "end") do
+      $emitter.block(start: "block ;; for", finish: "end") do
         if lexer.peek.kind != ";"
           Expression.call(lexer, frame)
           $emitter.emit("drop ;; discard for initializer")
         end
         lexer.next(";")
-        $emitter.emit.block(start: "loop", finish: "end") do
+        $emitter.block(start: "loop", finish: "end") do
           if lexer.peek().kind != ";"
-            load_result(expression(lexer, frame))
+            load_result(Expression.call(lexer, frame))
             $emitter.emit("i32.eqz ;; for test")
             $emitter.emit("br_if 1 ;; exit loop")
           end
@@ -782,7 +782,7 @@ class Statement
           if lexer.peek().kind != ")"
             # save lexer position to emit advance stmt later (nasty hack)
             saved_lexer = lexer.clone() # TODO clone or dup?
-            $emitter.emit.no_emit() do
+            $emitter.no_emit() do
               Expression.call(lexer, frame)  # advance past expr
             end
           end
