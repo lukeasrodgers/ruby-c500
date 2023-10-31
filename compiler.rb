@@ -86,8 +86,6 @@ class StringPool
 end
 
 $str_pool = StringPool.new
-# $str_pool.add("foo")
-# puts $str_pool.pooled
 
 # Token kinds
 # Literal tokens (symbols and keywords): the `content` of these will be the same as their `kind`
@@ -413,16 +411,11 @@ class Expression
   # dictionaries of { token: instruction_to_emit }
   def self.makeop(method_name, higher, ops, rtype = nil)
     define_method(method_name) do
-      # call another class method method
-      # TODO not sure what to do here, what is python callable?
-      # puts("look higher from #{method_name}")
       lhs_meta = send(higher)
-      # puts "is #{lexer.peek().kind} in #{ops.keys()} #{ops.keys().map(&:to_s).include?(lexer.peek().kind.to_s)}"
       if ops.keys().map(&:to_s).include?(lexer.peek().kind.to_s)
         lhs_meta = load_result(lhs_meta)
         op_token = lexer.next()
         load_result(send(method_name))
-        # TODO: type checking?
         $emitter.emit("#{ops[op_token.kind.to_sym]}")
         mask_to_sizeof(rtype || lhs_meta.type)
         return ExprMeta.new(false, lhs_meta.type)
@@ -454,7 +447,6 @@ class Expression
         die("lhs of assignment cannot be value", lexer.line)
       end
       $emitter.emit("call $__dup_i32")  # save copy of addr for later
-      # byebug
       rhs_meta = load_result(assign())
 
       $emitter.emit(lhs_meta.type.store_ins())
@@ -942,9 +934,6 @@ def compile(src)
     $emitter.emit("(data $.rodata (i32.const #{$str_pool.base}) \"#{$str_pool.pooled()}\")")
   end
 end
-
-# with fileinput.input(encoding="utf-8") as fi:
-    # compile("".join(fi))  # todo: make this line-at-a-time?
 
 path = ARGV[0]
 s = File.read(path)
