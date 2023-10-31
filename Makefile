@@ -6,4 +6,5 @@ test:
 	@./compare_compilers add.c && echo "add.c success" || echo "add.c failed"
 	@./compare_compilers lt.c && echo "lt.c success" || echo "lt.c failed"
 	@./compare_compilers swap-fib.c && echo "swap-fib.c success" || echo "swap-fib.c failed"
+	@./compare_compilers mult.c && echo "mult.c success" || echo "mult.c failed"
 	@echo "All tests completed"
