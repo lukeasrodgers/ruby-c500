@@ -417,13 +417,13 @@ class Expression
       # TODO not sure what to do here, what is python callable?
       # puts("look higher from #{method_name}")
       lhs_meta = send(higher)
-      # puts "is #{lexer.peek().kind} in #{ops.keys()}"
+      # puts "is #{lexer.peek().kind} in #{ops.keys()} #{ops.keys().map(&:to_s).include?(lexer.peek().kind.to_s)}"
       if ops.keys().map(&:to_s).include?(lexer.peek().kind.to_s)
         lhs_meta = load_result(lhs_meta)
         op_token = lexer.next()
         load_result(send(method_name))
         # TODO: type checking?
-        $emitter.emit("#{ops[op_token.kind]}")
+        $emitter.emit("#{ops[op_token.kind.to_sym]}")
         mask_to_sizeof(rtype || lhs_meta.type)
         return ExprMeta.new(false, lhs_meta.type)
       end
