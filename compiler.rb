@@ -417,9 +417,8 @@ class Expression
       # TODO not sure what to do here, what is python callable?
       # puts("look higher from #{method_name}")
       lhs_meta = send(higher)
-      # puts("keys: #{ops.keys}\n\n\n")
-      # puts "peeknext = #{lexer.peek().kind}"
-      if ops.keys().to_s.include?(lexer.peek().kind.to_s)
+      # puts "is #{lexer.peek().kind} in #{ops.keys()}"
+      if ops.keys().map(&:to_s).include?(lexer.peek().kind.to_s)
         lhs_meta = load_result(lhs_meta)
         op_token = lexer.next()
         load_result(send(method_name))
