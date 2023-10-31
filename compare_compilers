@@ -26,11 +26,8 @@ eval "$python_command" > "$python_output_file"
 # Compare the output files
 if cmp -s "$ruby_output_file" "$python_output_file"; then
     echo "Success"
+    exit 0
 else
     echo "Failure: Outputs do not match"
-    echo "Ruby Output:"
-    cat "$ruby_output_file"
-    echo "Python Output:"
-    cat "$python_output_file"
+    exit 1
 fi
-
