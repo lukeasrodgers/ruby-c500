@@ -119,6 +119,7 @@ class Lexer
       while @loc < @src.size && @src[@loc] != "\n"
         @loc += 1
       end
+      true
     elsif @src[@loc..].start_with?("/*")
       start_line = @line
       @loc += 2
@@ -137,6 +138,7 @@ class Lexer
         @line += 1
       end
       @loc += 1
+      true
     else
       false
     end
@@ -401,12 +403,6 @@ def mask_to_sizeof(t)
     $emitter.emit("i32.const #{hex(2 ** (8 * t.sizeof - t.signed) - 1)}")
     $emitter.emit(f"i32.and")
   end
-end
-
-class Expression
-  def initialize
-  end
-
 end
 
 class Expression
